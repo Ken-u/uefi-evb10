@@ -1,0 +1,174 @@
+#!/bin/bash
+# 在板子宿主机上跑。把板子送进 U-Boot 的 fastboot，抢到 CLI，设三个地址，再
+# `fastboot boot` 镜像。全程不写 flash，也**不碰 UniXNU / UiApp 菜单**。
+#
+# 用法：  board-launch.sh [IMG]            IMG 默认 /tmp/probe-payload-boot.img
+# 环境变量： CAPTURE_SECS（串口抓取秒数，默认 400）
+#            SERLOG（串口日志，默认 /tmp/launch-ser.log；同目录有 serial-capture.py 时
+#                    另存一份带相对秒数的 $SERLOG.ts——探针靠「多久后复位」传信号）
+#            ILOG  （本脚本自己的进度，默认 /tmp/launch.log）
+#            DRY_RUN=1  只做「板子现在是什么状态、下一步会做什么」的判断，打印后退出：
+#                       不碰串口、不 reboot、不 fastboot（板子不在线仍照常以 3/4 退出）
+#            ADB / FB   adb、fastboot 的路径（默认 宿主机上的位置；测试用假的顶替）
+# 依赖（和本脚本放同一目录）： uboot-cmd.py；serial-capture.py（有它才会产生带时间戳的 $SERLOG.ts，
+#                              tools/xnu-probe/run-kernel.sh、summarize-run.sh 都读那份）
+#
+# 铁律（全是踩出来的，（见 UniXNU-evb10 的 docs/handoff.zh-CN.md）、7 节）：
+#   1. 板子不在线就直接退出，不往没人听的串口里盲发东西。
+#   2. Ctrl+C 只在 USB **稳定**显示 18d1:4d00 之后发：25 次 x 100 ms，单个 fd。
+#      绝不在 adb reboot bootloader 的同时开高频 \003 流（400 次 x 50 ms 弄死过板子）。
+#   3. 没拿到 `=>` 就退出，**不**继续 fastboot boot。
+#   4. 三个地址缺一不可（实测）：
+#        kernel_addr_r=0xa000000   探针 stub 在 加载地址+0x502000，低了会被它搬到
+#                                  0x200000 的 5 MiB FV 盖掉
+#        fdt_addr_r=0x30000000     默认 0x08300000 撞 U-Boot 自己的 FDT_DTBO，
+#                                  bootm 报 ret=-12
+#        ramdisk_addr_r=0x50000000 默认 0xa200000 落在 stub/FV 里；payload ramdisk
+#                                  72 MB 级，必须放到干净的高地址
+#   5. USB ID：18d1:4d00 才是 U-Boot fastboot（有 `boot`）。18d1:d001 **本身不说明不能用**：
+#      这块板的 Android 用户态是坏的，每次只起到 recovery，recovery 的 USB 就是 d001、
+#      同时 adb 在线（状态 recovery）——这是上电后的**常态**，该走 `adb reboot bootloader`
+#      （HANDOFF 第 4 节）。所以判断顺序是 4d00 → adb 在线 → 最后才是「d001 且 adb 不在线
+#      = 纯 fastbootd，没有 boot 命令」才退出。（旧版把 d001 排在 adb 前面，上电后的
+#      常态被它拒绝了——2026-10-27 自动触发器实测撞出来的。）
+#   6. `fastboot boot` 偶尔卡在 "Sending 'boot.img'"（见过一次）：单独一次 Ctrl+C
+#      能让 U-Boot 回到 CLI，然后重跑本脚本。
+#   7. fastboot 不需要 sudo。
+#   8. 同一时刻只许一个实例（flock /tmp/board-launch.lock）。撞车的那个什么都不碰、
+#      退出码 9——自动触发（wait-and-launch.sh）和手动运行不会互相踩串口。
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+IMG="${1:-/tmp/probe-payload-boot.img}"
+SER=/dev/ttyUSB0
+SERLOG="${SERLOG:-/tmp/launch-ser.log}"
+ILOG="${ILOG:-/tmp/launch.log}"
+CAPTURE_SECS="${CAPTURE_SECS:-400}"
+ADB="${ADB:-adb}"
+FB="${FB:-fastboot}"
+DRY_RUN="${DRY_RUN:-0}"
+
+# 同一时刻只许一个启动器：串口只有一个读者，两个实例同时发 Ctrl+C / 抓串口会互相弄乱
+# （wait-and-launch.sh 自动触发和人手动跑可能撞车）。**必须在 `: > "$ILOG"` 之前**拿锁，
+# 否则后来者会先把先来者的日志清空。锁随本脚本退出释放；抓串口的 cat 子进程会继承它，
+# 它还在读串口时锁不放——这正是想要的语义。
+LOCK="${LAUNCH_LOCK:-/tmp/board-launch.lock}"
+exec 9>"$LOCK" || { echo "打不开锁文件 $LOCK" >&2; exit 1; }
+flock -n 9 || { echo "另一个 board-launch.sh 正在跑（锁 $LOCK），本次不动串口，退出" >&2; exit 9; }
+
+: > "$ILOG"
+say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$ILOG"; }
+die() { local msg="$1"; say "中止：$msg"; exit "${2:-1}"; }
+usb_ids() { lsusb | grep -Eo '18d1:[0-9a-f]{4}|2207:[0-9a-f]{4}' | tr '\n' ' '; }
+stable_4d00() { # 连续 N 次(每次 0.2 s)都看到 4d00 才算稳定
+	local need="${1:-5}" n=0 i
+	for i in $(seq 1 150); do
+		if lsusb | grep -q '18d1:4d00'; then n=$((n + 1)); else n=0; fi
+		[ "$n" -ge "$need" ] && return 0
+		sleep 0.2
+	done
+	return 1
+}
+
+[ -f "$IMG" ] || die "找不到镜像 $IMG"
+[ -f "$HERE/uboot-cmd.py" ] || die "找不到 $HERE/uboot-cmd.py"
+[ "$DRY_RUN" = 1 ] || stty -F "$SER" 1500000 raw -echo || die "串口 $SER 打不开"
+
+# ---- 0. 板子得在线 ----
+adb_up() { "$ADB" devices 2>/dev/null | awk 'NR>1 && $2 ~ /^(device|recovery)$/ {f=1} END{exit !f}'; }
+say "0. 当前 USB: [$(usb_ids)]"
+if lsusb | grep -q '18d1:4d00'; then
+	say "   已在 U-Boot fastboot"
+elif adb_up; then
+	# 顺序不能换：必须排在 d001 判断**前面**（见铁律 5）。recovery 的 USB 是 d001，adb 同时在线。
+	say "   adb 在线: $("$ADB" devices | awk 'NR>1 && NF {print $1" "$2}' | tr '\n' ';')"
+elif lsusb | grep -q '18d1:d001'; then
+	die "板子在 fastbootd(18d1:d001) 而且 adb 不在线；它没有 boot 命令，先 fastboot reboot 回 Android/recovery" 4
+else
+	die "板子不在线（USB 里没有 18d1:*，adb 也没设备）。不盲发任何东西。" 3
+fi
+if [ "$DRY_RUN" = 1 ]; then
+	if lsusb | grep -q '18d1:4d00'; then
+		say "DRY_RUN: 已在 4d00，下一步直接抢 U-Boot CLI（不会 reboot）。什么都没做。"
+	else
+		say "DRY_RUN: 下一步会 adb reboot bootloader，然后等 4d00 稳定。什么都没做。"
+	fi
+	exit 0
+fi
+
+# ---- 1. 进 U-Boot fastboot，等 4d00 稳定 ----
+if ! lsusb | grep -q '18d1:4d00'; then
+	say "1. adb reboot bootloader"
+	"$ADB" reboot bootloader 2>/dev/null
+fi
+# U-Boot 会进两次 fastboot（late-init 一次、bootcmd 一次），所以要「稳定」而不是「出现」
+stable_4d00 5 || die "18d1:4d00 没有稳定出现，USB=[$(usb_ids)]" 5
+sleep 1
+say "   4d00 稳定，USB=[$(usb_ids)]"
+
+# ---- 2. 抢 U-Boot CLI ----
+say "2. 25 x 100 ms Ctrl+C（单 fd）"
+pkill -f '^(timeout [0-9]+ )?cat /dev/ttyUSB0$' 2>/dev/null   # 只杀我们自己抓串口的 cat（整行锚定，不会误伤别人的 cat，也不会匹配到 ssh 命令行）
+sleep 0.3
+: > "$SERLOG"
+timeout 30 cat "$SER" >> "$SERLOG" 2>/dev/null &
+CAP=$!
+sleep 0.3
+python3 - <<'PY'
+import os, time
+fd = os.open("/dev/ttyUSB0", os.O_WRONLY | os.O_NOCTTY)
+for _ in range(25):
+    os.write(fd, b"\x03")
+    time.sleep(0.1)
+os.close(fd)
+PY
+sleep 1.5
+printf '\r\n' > "$SER"
+sleep 1.5
+kill "$CAP" 2>/dev/null; wait "$CAP" 2>/dev/null
+if tr -d '\000' < "$SERLOG" | grep -qa '=> '; then
+	say "   拿到 => 提示符"
+else
+	say "   串口尾部："; tail -c 400 "$SERLOG" | tr -cd '[:print:]\n' | tail -5 | tee -a "$ILOG"
+	die "没拿到 =>，不继续 fastboot boot" 6
+fi
+
+# ---- 3. 设地址并校验 ----
+say "3. setenv x3 并校验"
+OUT="$(python3 "$HERE/uboot-cmd.py" \
+	'setenv kernel_addr_r 0xa000000' \
+	'setenv fdt_addr_r 0x30000000' \
+	'setenv ramdisk_addr_r 0x50000000' \
+	'printenv kernel_addr_r fdt_addr_r ramdisk_addr_r')"
+echo "$OUT" | tee -a "$ILOG"
+for kv in kernel_addr_r=0xa000000 fdt_addr_r=0x30000000 ramdisk_addr_r=0x50000000; do
+	echo "$OUT" | grep -q "^$kv" || die "printenv 里没看到 $kv" 7
+done
+
+# ---- 4. 回 fastboot ----
+say "4. fastboot usb 0"
+TO=3 python3 "$HERE/uboot-cmd.py" 'fastboot usb 0' >/dev/null
+stable_4d00 4 || die "fastboot usb 0 之后 4d00 没回来，USB=[$(usb_ids)]" 8
+sleep 1
+
+# ---- 5. boot ----
+say "5. 起串口抓取（${CAPTURE_SECS}s）并 fastboot boot $IMG ($(stat -c %s "$IMG") B)"
+pkill -f '^(timeout [0-9]+ )?cat /dev/ttyUSB0$' 2>/dev/null; sleep 0.3
+: > "$SERLOG"
+if [ -f "$HERE/serial-capture.py" ]; then
+	# 同一个读者同时写两份：$SERLOG（原样）和 $SERLOG.ts（每行带相对秒数）。
+	# 板子上看不到屏幕时，「ExitBootServices 之后过多久复位」就是信号，必须有时间。
+	python3 "$HERE/serial-capture.py" "$SER" "$CAPTURE_SECS" "$SERLOG" "$SERLOG.ts" 2>/dev/null &
+	say "   带时间戳的串口日志: $SERLOG.ts"
+else
+	timeout "$CAPTURE_SECS" cat "$SER" > "$SERLOG" 2>/dev/null &
+fi
+CAP=$!
+timeout 150 "$FB" boot "$IMG" >> "$ILOG" 2>&1
+RC=$?
+say "   fastboot rc=$RC"
+if [ "$RC" -ne 0 ]; then
+	say "   fastboot boot 失败/超时。若卡在 Sending：串口发 **一次** Ctrl+C 再重跑"
+fi
+say "   串口日志持续写入 $SERLOG（本脚本等抓取结束）"
+wait "$CAP" 2>/dev/null
+say "完成，串口共 $(stat -c %s "$SERLOG") 字节"

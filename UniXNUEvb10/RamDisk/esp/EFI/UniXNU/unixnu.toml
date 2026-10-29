@@ -1,0 +1,22 @@
+# UniXNU 配置：从固件内的 RAM disk 读取（UniXNURamDiskDxe）。
+# 先只放 action 项，验证「配置被读到」；XNU 项等 kernel.macho 就绪再加。
+version = 1
+
+[boot]
+timeout = 10
+default = "exit"
+
+[ui]
+title = "UniXNU on RK3588 EVB10"
+
+[[entry]]
+id = "exit"
+title = "Exit to firmware"
+type = "action"
+action = "exit"
+
+[[entry]]
+id = "restart"
+title = "Restart"
+type = "action"
+action = "reset"

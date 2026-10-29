@@ -1,0 +1,94 @@
+#/** @file
+#
+#  RK3588 ArmPlatformLib for UniXNU.
+#
+#  Identical to upstream Silicon/Rockchip/RK3588/Library/PlatformLib (its two
+#  C files are compiled straight from the upstream tree, nothing is copied),
+#  except that ArmPlatformPeiBootAction is not a bare "ret": when the firmware
+#  is entered at EL2 it drops to EL1 before any other code runs.
+#
+#  Why: DarwinBoot's kernel hand-off (DarwinEnter) is EL1-only, it clears
+#  SCTLR_EL1.{M,C,I} and branches to the kernel, and it refuses to boot from
+#  any other exception level ("DARWINBOOT: unsupported inputs or exception
+#  level"). TF-A hands BL33 over at EL2, and so does U-Boot when the firmware
+#  is started through "fastboot boot", so the whole of UEFI has to be moved
+#  down. EDK2 itself runs at either level (ArmLib has EL1/EL2 variants of
+#  everything that differs), so nothing else in the firmware changes.
+#
+#  Copyright (c) 2023-2024, Mario Bălănică <mariobalanica02@gmail.com>
+#  Copyright (c) 2021, Jared McNeill <jmcneill@invisible.ca>
+#  Copyright (c) 2017-2021, Andrei Warkentin <andrey.warkentin@gmail.com>
+#  Copyright (c) 2014-2016, Linaro Limited. All rights reserved.
+#  Copyright (c) 2011-2019, ARM Limited. All rights reserved.
+#  Copyright (c) 2026, UniXNU contributors. All rights reserved.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = UniXNUPlatformLib
+  FILE_GUID                      = 3C2A0584-0E61-4EE9-8EB1-E14D3D87B6DC
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = ArmPlatformLib|SEC PEIM
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
+  ArmPkg/ArmPkg.dec
+  ArmPlatformPkg/ArmPlatformPkg.dec
+  Silicon/Rockchip/RK3588/RK3588.dec
+  Silicon/Rockchip/RockchipPkg.dec
+  UefiCpuPkg/UefiCpuPkg.dec
+
+[LibraryClasses]
+  ArmLib
+  BaseVariableLib
+  IoLib
+  MemoryAllocationLib
+  PcdLib
+  PrintLib
+  ResetUtilityLib
+  SaradcLib
+  SdramLib
+  SerialPortLib
+
+[Sources.common]
+  # <repo>/UniXNUEvb10/Library/UniXNUPlatformLib -> <repo>; build.sh links <repo>/upstream to the edk2-rk3588 checkout
+  ../../../upstream/edk2-rockchip/Silicon/Rockchip/RK3588/Library/PlatformLib/Rk3588.c
+  ../../../upstream/edk2-rockchip/Silicon/Rockchip/RK3588/Library/PlatformLib/Rk3588Mem.c
+
+[Sources.AARCH64]
+  UniXNUHelper.S
+
+[FixedPcd]
+  gArmTokenSpaceGuid.PcdFvBaseAddress
+  gArmTokenSpaceGuid.PcdFvSize
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSerialRegisterBase
+  gArmTokenSpaceGuid.PcdGicDistributorBase
+  gArmTokenSpaceGuid.PcdGicRedistributorsBase
+  gArmPlatformTokenSpaceGuid.PcdCoreCount
+  gArmTokenSpaceGuid.PcdArmPrimaryCoreMask
+  gArmTokenSpaceGuid.PcdArmPrimaryCore
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableBase64
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableSize
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwWorkingSize
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwSpareSize
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSerialClockRate
+  gArmTokenSpaceGuid.PcdSystemMemoryBase
+  gArmTokenSpaceGuid.PcdSystemMemorySize
+
+[PatchPcd]
+  gEfiMdePkgTokenSpaceGuid.PcdUartDefaultBaudRate
+
+[Ppis]
+  gArmMpCoreInfoPpiGuid
+
+[Guids]
+  gRK3588DxeFormSetGuid
+  gRockchipResetTypeMaskromGuid

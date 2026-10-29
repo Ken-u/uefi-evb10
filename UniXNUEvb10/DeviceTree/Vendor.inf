@@ -1,0 +1,29 @@
+#/** @file
+#
+#  EVB10 vendor device tree blob, built from Rockchip's own DTS by
+#  ../../../tools/build-evb10-dtb.sh.
+#
+#  The .dtb next to this file is generated, not hand-edited: it is
+#  rk3588-evb10-v10-linux.dts out of kernel-6.12 with /chosen/bootargs
+#  removed. Re-run the script instead of patching the blob.
+#
+#  Copyright (c) 2024, Mario Bălănică <mariobalanica02@gmail.com>
+#  Copyright (c) 2026, UniXNU contributors. All rights reserved.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = DeviceTree-Vendor
+  # Same FILE_GUID as the upstream Vendor.inf on purpose: FdtPlatformDxe and
+  # PlatformGetDtbFileGuid look the blob up by GUID, and UniXNU/ROCK 5B users
+  # already have tooling keyed on this one. Only one Vendor.inf is linked into
+  # a given platform, so there is no clash.
+  FILE_GUID                      = d58b4028-43d8-4e97-87d4-4e3716136580
+  MODULE_TYPE                    = USER_DEFINED
+  VERSION_STRING                 = 1.0
+
+[Binaries]
+  BIN|rk3588-evb10-v10.dtb

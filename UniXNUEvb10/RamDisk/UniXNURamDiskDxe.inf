@@ -1,0 +1,50 @@
+## @file
+#  Registers a RAM disk so the UniXNU payload shows up as
+#  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL (via PartitionDxe and Fat) and UniXNU can
+#  read \EFI\UniXNU\unixnu.toml on a board that has no other file system.
+#
+#  Source 1: the bootloader's initrd, found through the FDT address the probe
+#  stub leaves in TPIDRRO_EL0. Source 2 (fallback): a small FAT image stored in
+#  this firmware volume as a FILE FREEFORM with one RAW section; its GUID is in
+#  UniXNURamDiskDxe.c and in UniXNUEvb10.Modules.fdf.inc. Keep them in sync.
+#
+#  Copyright (c) 2026, UniXNU contributors. All rights reserved.
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x00010019
+  BASE_NAME      = UniXNURamDiskDxe
+  FILE_GUID      = 5E2B8C41-6A0D-4B77-9C13-D4F1A7E90B26
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 0.1
+  ENTRY_POINT    = UniXNURamDiskDxeEntry
+
+[Sources]
+  UniXNURamDiskDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DxeServicesLib
+  DxeServicesTableLib
+  FdtLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Guids]
+  gEfiEndOfDxeEventGroupGuid
+  gEfiVirtualDiskGuid
+
+[Protocols]
+  gEfiRamDiskProtocolGuid             ## CONSUMES
+
+[Depex]
+  gEfiRamDiskProtocolGuid

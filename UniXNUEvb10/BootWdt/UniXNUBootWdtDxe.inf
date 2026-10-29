@@ -1,0 +1,39 @@
+## @file
+#  Hardware watchdog safety net for bring-up on the RK3588 EVB10: armed at DXE,
+#  kicked from a timer event, no longer kicked after ExitBootServices, so a
+#  hung firmware or kernel always ends in a reset instead of a dead board.
+#  See UniXNUBootWdtDxe.c for the why and for how to switch it off.
+#
+#  Copyright (c) 2026, UniXNU contributors. All rights reserved.
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x00010019
+  BASE_NAME      = UniXNUBootWdtDxe
+  FILE_GUID      = F54CB28F-2051-44A2-9E49-AD51922B0C7A
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 0.1
+  ENTRY_POINT    = UniXNUBootWdtEntry
+
+[Sources]
+  UniXNUBootWdtDxe.c
+  UniXNUBootWdtArgs.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  DebugLib
+  FdtLib
+  IoLib
+  TimerLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Guids]
+  gEfiEventExitBootServicesGuid
+
+[Depex]
+  gEfiTimerArchProtocolGuid

@@ -1,0 +1,16 @@
+# Machine-specific paths, hosts and accounts
+.env
+# Generated
+/build/
+/out/
+/upstream
+/artifacts/
+/runs/
+UniXNUEvb10/RamDisk/esp.img
+UniXNUEvb10/DeviceTree/*.dtb
+*.o
+*.elf
+*.log
+*.ts
+*.raw
+__pycache__/

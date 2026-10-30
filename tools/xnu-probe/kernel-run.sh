@@ -18,8 +18,13 @@ CAP="${CAPTURE_SECS:-200}"
 WAIT="${WAIT_SECS:-300}"
 ADB="${ADB:-adb}"
 
+# USB ID 读 sysfs，不用 lsusb：路上的 hub 一抖动 lsusb 就要 6–8 s（2026-10-29 实测），"连续在线"的判断凑不齐。
+usb_list() { local d; for d in /sys/bus/usb/devices/*; do [ -r "$d/idVendor" ] && echo "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)"; done; }
+usb_has() { usb_list | grep -q "^$1\$"; }
+usb_ids() { usb_list | grep -E '^(18d1|2207):[0-9a-f]{4}$' | tr '\n' ' '; }
 online() {
-	lsusb | grep -q '18d1:4d00' && return 0
+	usb_has 18d1:4d00 && return 0
+	usb_has 18d1:d001 || return 1   # U-Boot fastboot 和 recovery 都不在总线上：不必去问要好几秒的 adb
 	"$ADB" devices 2>/dev/null | awk 'NR>1 && $2 ~ /^(device|recovery)$/ {f=1} END{exit !f}'
 }
 
@@ -32,23 +37,27 @@ hw_reset() {
 	return "${PIPESTATUS[0]}"
 }
 
-wait_online() { # 秒数：连续在线 8 s 算稳定
-	local n=0
-	for _ in $(seq 1 "$1"); do
-		if online; then n=$((n + 1)); else n=0; fi
-		[ "$n" -ge 8 ] && return 0
+wait_online() { # 秒数：连续在线 ONLINE_STABLE_SECS（默认 4）秒算稳定。按时钟算，不按次数：每次判断本身可能要几秒
+	local deadline=$((SECONDS + $1)) since=-1
+	while [ "$SECONDS" -lt "$deadline" ]; do
+		if online; then
+			[ "$since" -lt 0 ] && since=$SECONDS
+			[ $((SECONDS - since)) -ge "${ONLINE_STABLE_SECS:-4}" ] && return 0
+		else
+			since=-1
+		fi
 		sleep 1
 	done
 	return 1
 }
 
 if ! wait_online "$WAIT"; then
-	echo "板子 ${WAIT}s 内没有稳定回到可用状态（USB: $(lsusb | grep -Eo '18d1:[0-9a-f]{4}|2207:[0-9a-f]{4}' | tr '\n' ' ')）"
+	echo "板子 ${WAIT}s 内没有稳定回到可用状态（USB: $(usb_ids)）"
 	# 兜底：按一次硬件 RESET，再等一轮（看门狗/PSCI 都没把它带回来 = 它卡在固件或别的什么里）
 	if hw_reset; then
 		echo "已按硬件 RESET 键，再等 ${WAIT}s"
 		if ! wait_online "$WAIT"; then
-			echo "硬件复位后 ${WAIT}s 仍没回来（USB: $(lsusb | grep -Eo '18d1:[0-9a-f]{4}|2207:[0-9a-f]{4}' | tr '\n' ' ')）"
+			echo "硬件复位后 ${WAIT}s 仍没回来（USB: $(usb_ids)）"
 			exit 3
 		fi
 	else

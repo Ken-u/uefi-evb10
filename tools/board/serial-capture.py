@@ -40,8 +40,11 @@ def main():
     line_t = 0.0
     # UEFI 自己的 eMMC 初始化抖动（HS400 CRC Error）这一轮就作废了（run-kernel.sh 会自动重跑）：
     # 不必把整个 CAPTURE_SECS 抓完（板子此时已经回 Android，白等几分钟），再抓几秒就收。EARLY_STOP=0 关掉。
+    # 内核的从核没起来（`evb10: smp running 0 conduit 1`，八个核只剩 CPU 0 在跑一整个 iPadOS）这一轮同样作废：
+    # 性能、时序全不可信，run-kernel.sh 会自动重跑；这里也提前收。
     early = os.environ.get("EARLY_STOP", "1") != "0"
     deadline = None
+    why = ""
 
     def clean(b):
         out = []
@@ -59,7 +62,7 @@ def main():
         if now >= secs:
             break
         if deadline is not None and now >= deadline:
-            ts.write("# stopped early: UEFI's eMMC init flaked\n")
+            ts.write("# stopped early: %s\n" % why)
             break
         r, _, _ = select.select([fd], [], [], 0.1)
         if r:
@@ -80,6 +83,10 @@ def main():
                     emit(line, line_t)
                     if early and deadline is None and b"EmmcSetBusMode: Switch to HS400 CRC Error" in line:
                         deadline = (time.monotonic() - t0) + 8
+                        why = "UEFI's eMMC init flaked"
+                    elif early and deadline is None and (b"evb10: smp running 0 conduit 1" in line or b"evb10: smp running 0 conduit 2" in line):
+                        deadline = (time.monotonic() - t0) + 3
+                        why = "the kernel's secondary CPUs did not start (smp running 0)"
                     line_t = time.monotonic() - t0
         elif buf and (time.monotonic() - t0 - line_t) > 0.5:
             emit(buf, line_t, partial=True)

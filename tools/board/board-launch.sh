@@ -58,11 +58,15 @@ flock -n 9 || { echo "另一个 board-launch.sh 正在跑（锁 $LOCK），本�
 : > "$ILOG"
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$ILOG"; }
 die() { local msg="$1"; say "中止：$msg"; exit "${2:-1}"; }
-usb_ids() { lsusb | grep -Eo '18d1:[0-9a-f]{4}|2207:[0-9a-f]{4}' | tr '\n' ' '; }
+# USB ID 直接读 sysfs，不用 lsusb：lsusb 要向每个设备读描述符，路上的 hub 一掉线重连它就要 6–8 s（2026-10-29 板子的 USB 链路抖动时实测），
+# 抖动的链路上每个判断都慢 30 倍，下面的"稳定"就永远凑不齐。
+usb_list() { local d; for d in /sys/bus/usb/devices/*; do [ -r "$d/idVendor" ] && echo "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)"; done; }
+has_usb() { usb_list | grep -q "^$1\$"; }
+usb_ids() { usb_list | grep -E '^(18d1|2207):[0-9a-f]{4}$' | tr '\n' ' '; }
 stable_4d00() { # 连续 N 次(每次 0.2 s)都看到 4d00 才算稳定
 	local need="${1:-5}" n=0 i
 	for i in $(seq 1 150); do
-		if lsusb | grep -q '18d1:4d00'; then n=$((n + 1)); else n=0; fi
+		if has_usb 18d1:4d00; then n=$((n + 1)); else n=0; fi
 		[ "$n" -ge "$need" ] && return 0
 		sleep 0.2
 	done
@@ -76,18 +80,29 @@ stable_4d00() { # 连续 N 次(每次 0.2 s)都看到 4d00 才算稳定
 # ---- 0. 板子得在线 ----
 adb_up() { "$ADB" devices 2>/dev/null | awk 'NR>1 && $2 ~ /^(device|recovery)$/ {f=1} END{exit !f}'; }
 say "0. 当前 USB: [$(usb_ids)]"
-if lsusb | grep -q '18d1:4d00'; then
+# 链路抖动（dwc3 复位）时 USB 设备和 adb 每隔几秒到几十秒掉一次，一次判断可能正好落在断开的那一瞬（2026-10-30 实测：第一行还看到 d001，
+# 紧接着的判断里 USB 和 adb 都没了，于是误报"不在线"）。所以最多等 120 s，等到 4d00 或 adb 任一出现，再往下判断；
+# d001 在而 adb 一直不来才是 fastbootd。
+#（2026-10-30 实测的第二种误报：等待循环里 adb 在线、break 了，紧接着的 `elif adb_up` 再问一次，链路正好掉了，落到 d001 分支报"fastbootd"。
+# 所以循环里看到什么就记下来，下面按记下的状态走，不再重新问。）
+state=""
+for _ in $(seq 1 60); do
+	if has_usb 18d1:4d00; then state=uboot; break; fi
+	if adb_up; then state=adb; break; fi
+	sleep 2
+done
+if [ "$state" = uboot ]; then
 	say "   已在 U-Boot fastboot"
-elif adb_up; then
+elif [ "$state" = adb ]; then
 	# 顺序不能换：必须排在 d001 判断**前面**（见铁律 5）。recovery 的 USB 是 d001，adb 同时在线。
-	say "   adb 在线: $("$ADB" devices | awk 'NR>1 && NF {print $1" "$2}' | tr '\n' ';')"
-elif lsusb | grep -q '18d1:d001'; then
+	say "   adb 在线: $("$ADB" devices 2>/dev/null | awk 'NR>1 && NF {print $1" "$2}' | tr '\n' ';')"
+elif has_usb 18d1:d001; then
 	die "板子在 fastbootd(18d1:d001) 而且 adb 不在线；它没有 boot 命令，先 fastboot reboot 回 Android/recovery" 4
 else
-	die "板子不在线（USB 里没有 18d1:*，adb 也没设备）。不盲发任何东西。" 3
+	die "板子不在线（USB 里没有 18d1:*，adb 也没设备，等了 120 s）。不盲发任何东西。" 3
 fi
 if [ "$DRY_RUN" = 1 ]; then
-	if lsusb | grep -q '18d1:4d00'; then
+	if has_usb 18d1:4d00; then
 		say "DRY_RUN: 已在 4d00，下一步直接抢 U-Boot CLI（不会 reboot）。什么都没做。"
 	else
 		say "DRY_RUN: 下一步会 adb reboot bootloader，然后等 4d00 稳定。什么都没做。"
@@ -96,9 +111,15 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 
 # ---- 1. 进 U-Boot fastboot，等 4d00 稳定 ----
-if ! lsusb | grep -q '18d1:4d00'; then
+if ! has_usb 18d1:4d00; then
 	say "1. adb reboot bootloader"
-	"$ADB" reboot bootloader 2>/dev/null
+	# 链路抖动时 adb 可能正好看不到设备（"no devices"）：最多试 6 次，4d00 一出现就停（reboot 本身只发一次生效）
+	for try in 1 2 3 4 5 6; do
+		"$ADB" reboot bootloader 2>/dev/null && break
+		say "   adb reboot bootloader 失败（第 $try 次），3 s 后重试"
+		sleep 3
+		has_usb 18d1:4d00 && break
+	done
 fi
 # U-Boot 会进两次 fastboot（late-init 一次、bootcmd 一次），所以要「稳定」而不是「出现」
 stable_4d00 5 || die "18d1:4d00 没有稳定出现，USB=[$(usb_ids)]" 5
@@ -163,8 +184,21 @@ else
 	timeout "$CAPTURE_SECS" cat "$SER" > "$SERLOG" 2>/dev/null &
 fi
 CAP=$!
-timeout 150 "$FB" boot "$IMG" >> "$ILOG" 2>&1
-RC=$?
+# USB 链路上有 hub 抖动时（每隔 10–80 s 掉线重连一次），传输 100 MB 的 3–4 s 里可能正好被打断：
+# "Sending ... FAILED" 说明镜像没送完、U-Boot 没启动内核，U-Boot 的 fastboot 还在等，等链路回来再发一次是安全的。
+# 只对这一种失败重试；传完之后的失败（Booting FAILED、超时）不重试，因为那时内核可能已经起来了。
+RC=1
+for try in 1 2 3 4 5 6; do
+	: > "$ILOG.fb"
+	timeout 150 "$FB" boot "$IMG" >> "$ILOG.fb" 2>&1
+	RC=$?
+	cat "$ILOG.fb" >> "$ILOG"
+	[ "$RC" -eq 0 ] && break
+	grep -q "Sending 'boot.img'.*FAILED" "$ILOG.fb" || break
+	say "   fastboot boot 没送完（第 $try 次：$(grep -o 'FAILED.*' "$ILOG.fb" | head -1 | cut -c1-90)），4 s 后重试"
+	sleep 4
+done
+rm -f "$ILOG.fb"
 say "   fastboot rc=$RC"
 if [ "$RC" -ne 0 ]; then
 	say "   fastboot boot 失败/超时。若卡在 Sending：串口发 **一次** Ctrl+C 再重跑"

@@ -61,6 +61,12 @@
   DEFINE RK_RTC8563_ENABLE = TRUE
 
   #
+  # vdd_gpu_s0 in microvolts, set once at boot (RockchipPlatformLib.c). 0.75 V is Rockchip's operating point for the GPU clocks up to 800 MHz;
+  # 1 GHz needs 0.85 V: GPU_RAIL_UV=850000 ./build.sh (build.sh passes it as -D, which overrides this line).
+  #
+  DEFINE GPU_RAIL_UV = 750000
+
+  #
   # RK3588-based platform
   #
 !include Silicon/Rockchip/RK3588/RK3588Platform.dsc.inc
@@ -98,7 +104,7 @@
   # None of them is worth patching an upstream submodule for, so downgrade
   # them to warnings for this platform only.
   #
-  *_CLANGDWARF_*_CC_FLAGS = -Wno-error=tautological-constant-out-of-range-compare -Wno-error=sometimes-uninitialized -Wno-error=non-literal-null-conversion -Wno-error=c23-extensions
+  *_CLANGDWARF_*_CC_FLAGS = -Wno-error=tautological-constant-out-of-range-compare -Wno-error=sometimes-uninitialized -Wno-error=non-literal-null-conversion -Wno-error=c23-extensions -DGPU_RAIL_UV=$(GPU_RAIL_UV)
 
 ################################################################################
 #

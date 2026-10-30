@@ -4,6 +4,7 @@
 #   ./build.sh                 # DEBUG（板上调试必须用 DEBUG，串口日志靠它）
 #   ./build.sh -b RELEASE      # RELEASE
 #   ./build.sh -n              # 只打包 NOR 镜像，不重编
+#   GPU_RAIL_UV=850000 ./build.sh   # GPU 供电 0.85 V（微伏；默认 750000 = 0.75 V）：GPU 跑 1 GHz（mali-npll=1000）要它
 #
 # 不修改 upstream（edk2-rk3588）里的任何文件：平台 DSC/FDF 片段都在 UniXNUEvb10/ 里，
 # UniXNU 的包通过 PACKAGES_PATH 挂进来。路径来自 .env（见 .env.example）：UPSTREAM、UNIXNU、CLANG_BIN。
@@ -30,7 +31,7 @@ while getopts "b:p:nh" opt; do
     b) TARGET=$OPTARG ;;
     p) PLATFORM=$OPTARG ;;
     n) PACK_ONLY=1 ;;
-    h) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    h) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) exit 1 ;;
   esac
 done
@@ -106,6 +107,7 @@ if [ "$PACK_ONLY" -eq 0 ]; then
     -p "$DSC" \
     -n "$JOBS" \
     -D NETWORK_ALLOW_HTTP_CONNECTIONS=TRUE \
+    -D GPU_RAIL_UV="${GPU_RAIL_UV:-750000}" \
     --pcd gRockchipTokenSpaceGuid.PcdFitImageFlashAddress=0x100000
 fi
 

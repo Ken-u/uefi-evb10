@@ -58,9 +58,17 @@
 // reboot with a half-configured PMIC lands in a known state, matching what
 // upstream does for ROCK 5B.
 //
+#ifndef GPU_RAIL_UV
+#define GPU_RAIL_UV  750000
+#endif
+
 static struct regulator_init_data  rk806_init_data[] = {
   /* Master PMIC, buck 1..10 */
-  RK8XX_VOLTAGE_INIT (MASTER_BUCK1,  750000),   // vdd_gpu_s0, EVB10 default
+  // vdd_gpu_s0 (GPU_RAIL_UV, microvolts; build.sh passes it, 750000 by default). Rockchip's operating-point table for the Mali-G610 asks 0.75 V for up
+  // to 800 MHz, 0.80 V for 900 MHz and 0.85 V for 1 GHz. Nothing changes the rail while the clock runs (the Mali driver has no DVFS), so it is set once
+  // for the fastest clock the driver's mali-pll / mali-div / mali-npll boot-args are going to pick: GPU_RAIL_UV=850000 ./build.sh for 1 GHz.
+  // The rail's own limit on EVB10 is 0.95 V.
+  RK8XX_VOLTAGE_INIT (MASTER_BUCK1,  GPU_RAIL_UV),
   RK8XX_VOLTAGE_INIT (MASTER_BUCK2,  800000),   // vdd_cpu_lit_s0, regulator-init-microvolt
   RK8XX_VOLTAGE_INIT (MASTER_BUCK3,  750000),   // vdd_log_s0, suspend-microvolt
   RK8XX_VOLTAGE_INIT (MASTER_BUCK4,  750000),   // vdd_vdenc_s0, regulator-init-microvolt

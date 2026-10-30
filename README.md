@@ -17,7 +17,7 @@ See the [UEFI firmware guide](https://unixnu.com/porting/uefi-firmware). Board r
 | `tools/build-evb10-dtb.sh` | Generates the vendor dtb of the firmware from the Rockchip kernel's EVB10 dts |
 | `tools/mkesp-fv.py` | Packs `RamDisk/esp/` into the FAT image that goes into the firmware volume |
 | `tools/stub/` | The stub that moves the firmware volume to 0x200000 and jumps into it, so U-Boot can `fastboot boot` the firmware without flashing the NOR |
-| `tools/board/` | Boot-image assembly and board control: `make-payload-boot.sh`, `mk-bootimg.sh`, `patch-payload-toml.py`, `board-launch.sh`, `hw-reset.sh`, serial helpers |
+| `tools/board/` | Boot-image assembly and board control that is specific to this board: `make-payload-boot.sh`, `mk-bootimg.sh`, `patch-payload-toml.py`, `board-launch.sh` (the boot state machine and its USB ids), `uboot-enter.sh`, `hw-reset.sh` (a wrapper) |
 | `tools/xnu-probe/` | Run loop and analysis: `run-kernel.sh`, `summarize-run.sh`, trust-cache and Data-seed generators, screenshot and symbolication helpers |
 | `tests/` | Host tests: `bootwdt-args` (watchdog argument parser under ASan/UBSan, with mutation testing) and `el2drop` (the EL2 to EL1 assembly under QEMU) |
 
@@ -49,12 +49,16 @@ The eMMC controller initialization of the vendor firmware fails about once in fi
 (`EmmcSetBusMode: Switch to HS400 CRC Error`); `run-kernel.sh` repeats such a run.
 
 Not in this repository: the vendor binaries of edk2-rk3588 (DDR blob, BL31, OP-TEE; they come with
-the upstream checkout) and the generated dtb and ESP image.
+the upstream checkout), the generated dtb and ESP image, and the board tools every RK3588 board needs
+(timestamped serial capture, U-Boot console, USB helpers, reset controller wrapper). Those are in
+`tools/board/` of the `UniXNU-rk3588-common` checkout next to this repository (`RK3588_COMMON` in `.env`
+points elsewhere); `run-kernel.sh` copies them to the board host together with `board-launch.sh`.
 
 ## Safety notes for the tools
 
-- `hw-reset.sh` presses the board's RESET/RECOVERY/MASKROM keys through an ESP32-S3 controller. It makes
-  one attempt and never retries: repeating RESET interrupts the boot chain.
+- `hw-reset.sh` presses the board's RESET/RECOVERY/MASKROM keys through an ESP32-S3 controller (the
+  implementation is `tools/board/hw-reset.sh` of `UniXNU-rk3588-common`). It makes one attempt and never
+  retries: repeating RESET interrupts the boot chain.
 - `patch-payload-toml.py` removes the `shutdown` entry from the payload menu: on this board shutdown is
   PSCI SYSTEM_OFF and nothing can power the board on again remotely.
 - Only one serial reader at a time; `board-launch.sh` takes a lock.

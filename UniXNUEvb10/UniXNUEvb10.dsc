@@ -129,7 +129,14 @@
   gRockchipTokenSpaceGuid.PcdI2cSlaveBusesRuntimeSupport|{ FALSE, FALSE, FALSE, TRUE, FALSE }
   gRockchipTokenSpaceGuid.PcdRk860xRegulatorAddresses|{ 0x42, 0x43, 0x42 }
   gRockchipTokenSpaceGuid.PcdRk860xRegulatorBuses|{ 0x0, 0x0, 0x1 }
-  gRockchipTokenSpaceGuid.PcdRk860xRegulatorTags|{ $(SCMI_CLK_CPUB01), $(SCMI_CLK_CPUB23), $(SCMI_CLK_NPU) }
+  # The tag is the SCMI clock id of the cluster the regulator feeds; RK3588Dxe
+  # looks the big-core regulators up by it to set the 2.4 GHz voltage before
+  # boot. SCMI_CLK_NPU exists only as a C macro (ScmiDefinitions.h, 6), not as a
+  # DSC one: written as $(SCMI_CLK_NPU) here it stayed unresolved and the whole
+  # array was built as { 0, 0, 0 }, so the A76 clusters were clocked to 2.4 GHz
+  # but kept the regulator's power-on voltage and ran at about 1.78 GHz (2.23 GHz
+  # measured with the voltage set).
+  gRockchipTokenSpaceGuid.PcdRk860xRegulatorTags|{ $(SCMI_CLK_CPUB01), $(SCMI_CLK_CPUB23), 0x6 }
   gPcf8563RealTimeClockLibTokenSpaceGuid.PcdI2cSlaveAddress|0x51
   gRockchipTokenSpaceGuid.PcdRtc8563Bus|0x6
 

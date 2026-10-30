@@ -25,6 +25,11 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 RUNS="${RUNS_DIR:-$ROOT/runs}"
 TAG="${1:?用法: run-kernel.sh TAG}"
 BOARD_HOST="${BOARD_HOST:?set BOARD_HOST in .env}"
+# 串口采集、U-Boot 命令行、USB 辅助函数是各 RK3588 板子共用的，在 UniXNU-rk3588-common/tools/board（env.sh 给出位置）
+KIT="$RK3588_BOARD_TOOLS"
+for f in serial-capture.py uboot-cmd.py usb-lib.sh; do
+	[ -f "$KIT/$f" ] || { echo "error: $KIT/$f not found: clone UniXNU-rk3588-common next to this repository or set RK3588_COMMON in .env" >&2; exit 1; }
+done
 # 内核最长活到看门狗（EBS 后 ≈89 s，约在抓取的第 109 s），再留 U-Boot/recovery 起来的时间；panic 走 PSCI 的话 ≈85 s 就结束
 CAP="${CAPTURE_SECS:-130}"
 RETRIES="${RETRY_FLAKE:-2}"
@@ -41,8 +46,8 @@ if [ "${NO_PAYLOAD:-0}" != 1 ]; then
 fi
 
 echo "== 部署脚本到宿主机（CAPTURE_SECS=$CAP）"
-scp -q "$HERE/kernel-run.sh" "$ROOT/tools/board/board-launch.sh" "$ROOT/tools/board/serial-capture.py" \
-	"$ROOT/tools/board/uboot-cmd.py" "$BOARD_HOST:unixnu-probe/"
+scp -q "$HERE/kernel-run.sh" "$ROOT/tools/board/board-launch.sh" "$KIT/serial-capture.py" "$KIT/uboot-cmd.py" "$KIT/usb-lib.sh" \
+	"$BOARD_HOST:unixnu-probe/"
 ssh "$BOARD_HOST" "chmod +x ~/unixnu-probe/kernel-run.sh ~/unixnu-probe/board-launch.sh"
 
 # 上板跑一次，取回 TAG.ts / TAG.raw。宿主机的登录 shell 是 zsh：显式 bash -c

@@ -8,23 +8,22 @@
 #           WAIT_SECS（等板子回来的最长秒数，默认 300）
 #           ADB（adb 路径）
 #
-# 只依赖同目录的 board-launch.sh / serial-capture.py / uboot-cmd.py。
+# 只依赖同目录的 board-launch.sh / serial-capture.py / uboot-cmd.py / usb-lib.sh（后三个是各 RK3588 板子共用的，在 UniXNU-rk3588-common/tools/board）。
 # 不碰 UniXNU 菜单，不写 flash。抓取期间 宿主机上不要再开第二个串口读者（serial-cli.py、cat）。
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export USB_VENDORS='18d1|2207'
+. "$HERE/usb-lib.sh" 2>/dev/null || { echo "找不到 $HERE/usb-lib.sh（在 UniXNU-rk3588-common/tools/board，部署时和本脚本放同一目录）" >&2; exit 1; }
 IMG="${1:?用法: kernel-run.sh IMG TAG}"
 TAG="${2:?用法: kernel-run.sh IMG TAG}"
 CAP="${CAPTURE_SECS:-200}"
 WAIT="${WAIT_SECS:-300}"
 ADB="${ADB:-adb}"
 
-# USB ID 读 sysfs，不用 lsusb：路上的 hub 一抖动 lsusb 就要 6–8 s（2026-10-29 实测），"连续在线"的判断凑不齐。
-usb_list() { local d; for d in /sys/bus/usb/devices/*; do [ -r "$d/idVendor" ] && echo "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)"; done; }
-usb_has() { usb_list | grep -q "^$1\$"; }
-usb_ids() { usb_list | grep -E '^(18d1|2207):[0-9a-f]{4}$' | tr '\n' ' '; }
+# USB ID 读 sysfs，不用 lsusb（usb-lib.sh 里写了原因）。
 online() {
-	usb_has 18d1:4d00 && return 0
-	usb_has 18d1:d001 || return 1   # U-Boot fastboot 和 recovery 都不在总线上：不必去问要好几秒的 adb
+	has_usb 18d1:4d00 && return 0
+	has_usb 18d1:d001 || return 1   # U-Boot fastboot 和 recovery 都不在总线上：不必去问要好几秒的 adb
 	"$ADB" devices 2>/dev/null | awk 'NR>1 && $2 ~ /^(device|recovery)$/ {f=1} END{exit !f}'
 }
 

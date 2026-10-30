@@ -10,8 +10,9 @@
 #            DRY_RUN=1  只做「板子现在是什么状态、下一步会做什么」的判断，打印后退出：
 #                       不碰串口、不 reboot、不 fastboot（板子不在线仍照常以 3/4 退出）
 #            ADB / FB   adb、fastboot 的路径（默认 宿主机上的位置；测试用假的顶替）
-# 依赖（和本脚本放同一目录）： uboot-cmd.py；serial-capture.py（有它才会产生带时间戳的 $SERLOG.ts，
-#                              tools/xnu-probe/run-kernel.sh、summarize-run.sh 都读那份）
+# 依赖（和本脚本放同一目录）： uboot-cmd.py、usb-lib.sh；serial-capture.py（有它才会产生带时间戳的 $SERLOG.ts，
+#                              tools/xnu-probe/run-kernel.sh、summarize-run.sh 都读那份）。
+#                              这几个是各 RK3588 板子共用的，在 UniXNU-rk3588-common/tools/board，run-kernel.sh 部署时一起拷过去。
 #
 # 铁律（全是踩出来的，（见 UniXNU-evb10 的 docs/handoff.zh-CN.md）、7 节）：
 #   1. 板子不在线就直接退出，不往没人听的串口里盲发东西。
@@ -38,6 +39,8 @@
 #      退出码 9——自动触发（wait-and-launch.sh）和手动运行不会互相踩串口。
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
+export USB_VENDORS='18d1|2207' # usb_ids 只列这两家：Google 的 fastboot/recovery 和 Rockchip 的 rockusb/maskrom
+. "$HERE/usb-lib.sh" 2>/dev/null || { echo "找不到 $HERE/usb-lib.sh（在 UniXNU-rk3588-common/tools/board，部署时和本脚本放同一目录）" >&2; exit 1; }
 IMG="${1:-/tmp/probe-payload-boot.img}"
 SER=/dev/ttyUSB0
 SERLOG="${SERLOG:-/tmp/launch-ser.log}"
@@ -58,20 +61,8 @@ flock -n 9 || { echo "另一个 board-launch.sh 正在跑（锁 $LOCK），本�
 : > "$ILOG"
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$ILOG"; }
 die() { local msg="$1"; say "中止：$msg"; exit "${2:-1}"; }
-# USB ID 直接读 sysfs，不用 lsusb：lsusb 要向每个设备读描述符，路上的 hub 一掉线重连它就要 6–8 s（2026-10-29 板子的 USB 链路抖动时实测），
-# 抖动的链路上每个判断都慢 30 倍，下面的"稳定"就永远凑不齐。
-usb_list() { local d; for d in /sys/bus/usb/devices/*; do [ -r "$d/idVendor" ] && echo "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)"; done; }
-has_usb() { usb_list | grep -q "^$1\$"; }
-usb_ids() { usb_list | grep -E '^(18d1|2207):[0-9a-f]{4}$' | tr '\n' ' '; }
-stable_4d00() { # 连续 N 次(每次 0.2 s)都看到 4d00 才算稳定
-	local need="${1:-5}" n=0 i
-	for i in $(seq 1 150); do
-		if has_usb 18d1:4d00; then n=$((n + 1)); else n=0; fi
-		[ "$n" -ge "$need" ] && return 0
-		sleep 0.2
-	done
-	return 1
-}
+# USB ID 直接读 sysfs，不用 lsusb（usb-lib.sh 里写了原因：路上的 hub 一抖动 lsusb 每次要 6–8 s，"稳定"就凑不齐）。
+stable_4d00() { usb_stable 18d1:4d00 "${1:-5}"; } # 连续 N 次(每次 0.2 s)都看到 4d00 才算稳定
 
 [ -f "$IMG" ] || die "找不到镜像 $IMG"
 [ -f "$HERE/uboot-cmd.py" ] || die "找不到 $HERE/uboot-cmd.py"
@@ -128,25 +119,7 @@ say "   4d00 稳定，USB=[$(usb_ids)]"
 
 # ---- 2. 抢 U-Boot CLI ----
 say "2. 25 x 100 ms Ctrl+C（单 fd）"
-pkill -f '^(timeout [0-9]+ )?cat /dev/ttyUSB0$' 2>/dev/null   # 只杀我们自己抓串口的 cat（整行锚定，不会误伤别人的 cat，也不会匹配到 ssh 命令行）
-sleep 0.3
-: > "$SERLOG"
-timeout 30 cat "$SER" >> "$SERLOG" 2>/dev/null &
-CAP=$!
-sleep 0.3
-python3 - <<'PY'
-import os, time
-fd = os.open("/dev/ttyUSB0", os.O_WRONLY | os.O_NOCTTY)
-for _ in range(25):
-    os.write(fd, b"\x03")
-    time.sleep(0.1)
-os.close(fd)
-PY
-sleep 1.5
-printf '\r\n' > "$SER"
-sleep 1.5
-kill "$CAP" 2>/dev/null; wait "$CAP" 2>/dev/null
-if tr -d '\000' < "$SERLOG" | grep -qa '=> '; then
+if uboot_grab_cli "$SER" "$SERLOG"; then # usb-lib.sh：只杀我们自己抓串口的 cat（整行锚定），25 次 Ctrl+C，一个 fd，再回车，看有没有 `=> `
 	say "   拿到 => 提示符"
 else
 	say "   串口尾部："; tail -c 400 "$SERLOG" | tr -cd '[:print:]\n' | tail -5 | tee -a "$ILOG"
@@ -178,7 +151,15 @@ pkill -f '^(timeout [0-9]+ )?cat /dev/ttyUSB0$' 2>/dev/null; sleep 0.3
 if [ -f "$HERE/serial-capture.py" ]; then
 	# 同一个读者同时写两份：$SERLOG（原样）和 $SERLOG.ts（每行带相对秒数）。
 	# 板子上看不到屏幕时，「ExitBootServices 之后过多久复位」就是信号，必须有时间。
-	python3 "$HERE/serial-capture.py" "$SER" "$CAPTURE_SECS" "$SERLOG" "$SERLOG.ts" 2>/dev/null &
+	# 这一轮作废的两种情况，不必把整个 CAPTURE_SECS 抓完（EARLY_STOP=0 关掉）：
+	#  - UEFI 自己的 eMMC 初始化抖动（HS400 CRC Error）：板子此时已经回 Android，白等几分钟；run-kernel.sh 会自动重跑；
+	#  - 内核的从核没起来（`evb10: smp running 0 conduit 1|2`，八个核只剩 CPU 0 在跑整个 iPadOS）：性能、时序全不可信，同样自动重跑。
+	STOPS=()
+	if [ "${EARLY_STOP:-1}" != 0 ]; then
+		STOPS+=(--stop 'EmmcSetBusMode: Switch to HS400 CRC Error' 8 "UEFI's eMMC init flaked")
+		STOPS+=(--stop 'evb10: smp running 0 conduit [12]' 3 "the kernel's secondary CPUs did not start (smp running 0)")
+	fi
+	python3 "$HERE/serial-capture.py" ${STOPS[@]+"${STOPS[@]}"} "$SER" "$CAPTURE_SECS" "$SERLOG" "$SERLOG.ts" 2>/dev/null &
 	say "   带时间戳的串口日志: $SERLOG.ts"
 else
 	timeout "$CAPTURE_SECS" cat "$SER" > "$SERLOG" 2>/dev/null &

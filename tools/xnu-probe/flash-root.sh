@@ -6,6 +6,8 @@
 #   BOARD_SUDO_PASS=… WRITE=1 ./flash-root.sh IMG OFFSET_BYTES    # 真写（先过同样的检查）
 #   DRY_RUN=1 ./flash-root.sh IMG OFFSET_BYTES                    # 只看板子在线状态，不碰板子，不需要 sudo
 #
+# 依赖同目录的 flash-root.py 和 uboot-cmd.py（后者在 UniXNU-rk3588-common/tools/board，和 board-launch.sh 一样要手动或由 run-kernel.sh 拷过去）。
+#
 # OFFSET_BYTES：窗口在 userdata 里的字节偏移（4096 的倍数）。24 GiB = 25769803776（HFS+ 旧安装只占开头 20 GiB，
 # 不碰它；内核要加 boot-arg emmc-root-lba=N，N = userdata 首 LBA + OFFSET/512）。0 = 官方布局（覆盖旧安装）。
 #

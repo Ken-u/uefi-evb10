@@ -17,7 +17,7 @@ See the [UEFI firmware guide](https://unixnu.com/porting/uefi-firmware). Board r
 | `tools/build-evb10-dtb.sh` | Generates the vendor dtb of the firmware from the Rockchip kernel's EVB10 dts |
 | `tools/mkesp-fv.py` | Packs `RamDisk/esp/` into the FAT image that goes into the firmware volume |
 | `tools/stub/` | The stub that moves the firmware volume to 0x200000 and jumps into it, so U-Boot can `fastboot boot` the firmware without flashing the NOR |
-| `tools/board/` | Boot-image assembly and board control that is specific to this board: `make-payload-boot.sh`, `mk-bootimg.sh`, `patch-payload-toml.py`, `board-launch.sh` (the boot state machine and its USB ids), `uboot-enter.sh`, `hw-reset.sh` (a wrapper) |
+| `tools/board/` | Boot-image assembly and board control that is specific to this board: `make-payload-boot.sh`, `mk-bootimg.sh`, `patch-payload-toml.py`, `board-launch.sh` (the boot state machine and its USB ids), `uboot-enter.sh`, `hw-reset.sh` (a wrapper), `sdio-probe.py` (powers the AP6398S Wi-Fi module from U-Boot and reads its identity over SDIO) |
 | `tools/xnu-probe/` | Run loop and analysis: `run-kernel.sh`, `summarize-run.sh`, trust-cache and Data-seed generators, screenshot and symbolication helpers |
 | `tests/` | Host tests: `bootwdt-args` (watchdog argument parser under ASan/UBSan, with mutation testing) and `el2drop` (the EL2 to EL1 assembly under QEMU) |
 

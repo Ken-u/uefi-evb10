@@ -46,6 +46,16 @@ GPU_ADDON="${GPU_ADDON-${MALIMETAL_DIR:?set MALIMETAL_DIR in .env}/metal-plugin/
 if ! grep -q '"evb10-gpu-addon=1"' "$DEVICE/board.toml"; then
 	GPU_ADDON=""
 fi
+# 音频插件（UniXNU-evb10 的 scripts/build-evb10-audio-hal.py 的 audio.addon）：board.toml 带 evb10-audio-hal=1 时并进同一个 addon
+# （`unixnu build payload` 只收一个文件），内核把 audio/Evb10Audio.driver 写进 Data 卷并 union 挂到 /System/Library/Audio/Plug-Ins/HAL。
+# 它的可执行文件的 cdhash 要在 owner trust bundle 里：先 build-evb10-audio-hal.py，再 MaliMetal 的 usertest/build.sh。
+AUDIO_ADDON="${AUDIO_ADDON-$DEVICE/out/audio/audio.addon}"
+if [ -n "$GPU_ADDON" ] && [ -n "$AUDIO_ADDON" ] && { grep -q '"evb10-audio-hal=1"' "$DEVICE/board.toml" || [[ " ${EXTRA_KERNEL_ARGS:-} " == *" evb10-audio-hal=1 "* ]]; }; then
+	[ -f "$AUDIO_ADDON" ] || { echo "error: 没有音频 addon: $AUDIO_ADDON（先跑 UniXNU-evb10 的 scripts/build-evb10-audio-hal.py）" >&2; exit 1; }
+	mkdir -p "$ROOT/out"
+	$PY "$HERE/merge-addons.py" "$ROOT/out/merged.addon" "$GPU_ADDON" "$AUDIO_ADDON"
+	GPU_ADDON="$ROOT/out/merged.addon"
+fi
 
 # Data 种子（原始 APFS 容器，由 RAM 盘交给内核，内核把它当 /dev/md0）。没有它 /private/var 就是 OS 卷里那个
 # 空壳，launchd 起不来多少东西。由 tools/xnu-probe/make-data-seed.sh 做出来（空的容器；目录树由内核在挂载后拷进去）。

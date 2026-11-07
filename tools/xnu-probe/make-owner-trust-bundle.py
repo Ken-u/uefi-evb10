@@ -11,9 +11,13 @@ Nothing is re-signed and the original modules are not touched; only the cdhashes
 build of ONE binary: a different binary is not trusted. The bundle is only accepted by the payload step when its SHA-256 is in
 [payload] trust_cache_sha256 of board.toml: this script prints the line to add.
 
-    make-owner-trust-bundle.py [--original FILE] [--out FILE] [--cdhash HEX]... MACHO...
+    make-owner-trust-bundle.py [--original FILE] [--out FILE] [--cdhash HEX]... MACHO[@CATEGORY]...
 
-MACHO is a signed Mach-O (the cdhash is read from its signature, MaliMetal usertest/cdhash.py).
+MACHO is a signed Mach-O (the cdhash is read from its signature, MaliMetal usertest/cdhash.py). The entry gets the launch-constraint category
+CATEGORY (0..255, default 0 = none): AMFI checks a program that launchd starts as a daemon against the launch constraint of its category; the entry of
+the system's /usr/libexec/ptpd in the original module has category 1, but a program of the owner's that stands in place of a daemon (Orange Pi 5, evb10-exec=2)
+ran with category 7, one of the categories whose constraint on the program itself is only the validated-code one and whose parent constraint is launchd alone
+(chosen by reading the constraint table of the kernel's AMFI; with category 0 the launch was refused as a constraint violation).
 """
 import argparse
 import hashlib
@@ -66,22 +70,27 @@ def main():
     offsets = struct.unpack_from('<2I', original, 4)
     originals = [original[offsets[0]:offsets[1]], original[offsets[1]:]]
 
-    found = {}
-    for path in args.macho:
+    found, category = {}, {}
+    for argument in args.macho:
+        path, _, number = argument.partition('@')
         entries = cdhash_tool.describe(path)
         if len(entries) != 1:
             raise SystemExit('%s: %d CodeDirectories (one is expected)' % (path, len(entries)))
         found[entries[0]['cdhash']] = path
+        category[entries[0]['cdhash']] = int(number) if number else 0
+        if not 0 <= category[entries[0]['cdhash']] <= 255:
+            raise SystemExit('%s: the category is a byte' % argument)
     for value in args.cdhash:
         if len(value) != 40 or any(c not in '0123456789abcdef' for c in value.lower()):
             raise SystemExit('not a cdhash: %r' % value)
         found[value.lower()] = '(given)'
+        category.setdefault(value.lower(), 0)
     if not found:
         raise SystemExit('no cdhash given')
     hashes = sorted(bytes.fromhex(h) for h in found)
 
     identifier = uuid.uuid5(uuid.NAMESPACE_URL, 'evb10-owner-trust:' + ''.join(h.hex() for h in hashes))
-    own = struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, 0, 0]) for h in hashes)
+    own = struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, category[h.hex()], 0]) for h in hashes)
     modules = [own, *originals]
     cursor, starts = 16, []
     for module in modules:
@@ -97,7 +106,7 @@ def main():
     open(args.out, 'wb').write(bundle)
     digest = hashlib.sha256(bundle).hexdigest()
     for h in hashes:
-        print('owner cdhash %s  %s' % (h.hex(), found[h.hex()]))
+        print('owner cdhash %s  %s%s' % (h.hex(), found[h.hex()], '  (launch-constraint category %d)' % category[h.hex()] if category[h.hex()] else ''))
     print('wrote %s (%d bytes): owner module + both original modules unchanged' % (args.out, len(bundle)))
     print('sha256 %s' % digest)
     print('board.toml: trust_cache_sha256 = ["%s", "%s"]' % (ORIGINAL_SHA256, digest))
